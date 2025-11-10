@@ -3,149 +3,120 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const { body, validationResult } = require('express-validator');
 require('dotenv').config();
 
 const app = express();
 
-// 🔒 إعدادات الأمان
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "same-site" }
-}));
-
+// 🔧 إعدادات CORS الشاملة للإنتاج والتطوير
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://your-frontend-domain.com'] 
-    : ['http://localhost:3000', 'http://127.0.0.1:5500'],
-  credentials: true
+  origin: [
+    'https://cool-dusk-b34915.netlify.app',
+    'http://cool-dusk-b34915.netlify.app',
+    'https://one23-1-4noo.onrender.com',
+    'http://one23-1-4noo.onrender.com',
+    'http://localhost:3000',
+    'http://127.0.0.1:5500',
+    'http://localhost:5500',
+    'http://localhost:8080',
+    '*'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-app.use(express.json({ limit: '10kb' }));
-app.use(mongoSanitize());
+// معالجة طلبات preflight
+app.options('*', cors());
 
-// ⚡ معدل الطلبات
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP'
+// بديل إضافي لضمان عمل CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
 });
-app.use('/api/', limiter);
 
-// 🔐 اتصال آمن بقاعدة البيانات
-mongoose.connect(process.env.MONGODB_URI, {
+// Middlewares
+app.use(express.json());
+
+// اتصال بقاعدة البيانات
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/buildmart', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('✅ قاعدة البيانات متصلة آمنياً'))
-.catch(err => console.log('❌ خطأ في الاتصال:', err.message));
+.then(() => console.log('✅ قاعدة البيانات متصلة'))
+.catch(err => console.log('❌ خطأ في الاتصال:', err));
 
-// 🏗️ نماذج البيانات
+// نماذج البيانات
 const userSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'الاسم مطلوب'],
-    trim: true,
-    minlength: [2, 'الاسم يجب أن يكون على الأقل حرفين'],
-    maxlength: [50, 'الاسم لا يمكن أن يزيد عن 50 حرف']
+    trim: true
   },
   email: {
     type: String,
     required: [true, 'البريد الإلكتروني مطلوب'],
     unique: true,
     lowercase: true,
-    trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'البريد الإلكتروني غير صالح']
+    trim: true
   },
   password: {
     type: String,
     required: [true, 'كلمة المرور مطلوبة'],
-    minlength: [8, 'كلمة المرور يجب أن تكون 8 أحرف على الأقل'],
-    select: false
+    minlength: [6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل']
   },
   phone: {
     type: String,
-    trim: true,
-    match: [/^[0-9]{10}$/, 'رقم الجوال يجب أن يكون 10 أرقام']
+    trim: true
   },
   address: {
     type: String,
-    trim: true,
-    maxlength: [200, 'العنوان لا يمكن أن يزيد عن 200 حرف']
+    trim: true
   },
   role: {
     type: String,
     enum: ['customer', 'admin'],
     default: 'customer'
-  },
-  loginAttempts: {
-    type: Number,
-    default: 0
-  },
-  lockUntil: Date
+  }
 }, {
   timestamps: true
 });
 
+// تشفير كلمة المرور قبل الحفظ
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
-  
-  if (this.password.length < 8) {
-    return next(new Error('كلمة المرور يجب أن تكون 8 أحرف على الأقل'));
-  }
-  
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
 
-userSchema.methods.correctPassword = async function(candidatePassword) {
-  if (this.lockUntil && this.lockUntil > Date.now()) {
-    throw new Error('الحساب مغلق مؤقتاً بسبب محاولات تسجيل دخول فاشلة');
-  }
-  
-  const isMatch = await bcrypt.compare(candidatePassword, this.password);
-  
-  if (!isMatch) {
-    this.loginAttempts += 1;
-    if (this.loginAttempts >= 5) {
-      this.lockUntil = Date.now() + 30 * 60 * 1000; // 30 دقيقة
-    }
-    await this.save();
-    return false;
-  }
-  
-  if (this.loginAttempts > 0) {
-    this.loginAttempts = 0;
-    this.lockUntil = undefined;
-    await this.save();
-  }
-  
-  return true;
+// مقارنة كلمة المرور
+userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
+  return await bcrypt.compare(candidatePassword, userPassword);
 };
 
 const User = mongoose.model('User', userSchema);
 
+// نموذج المنتج
 const productSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'اسم المنتج مطلوب'],
-    trim: true,
-    minlength: [2, 'اسم المنتج يجب أن يكون على الأقل حرفين'],
-    maxlength: [100, 'اسم المنتج لا يمكن أن يزيد عن 100 حرف']
+    trim: true
   },
   description: {
     type: String,
-    required: [true, 'وصف المنتج مطلوب'],
-    minlength: [10, 'الوصف يجب أن يكون على الأقل 10 أحرف'],
-    maxlength: [1000, 'الوصف لا يمكن أن يزيد عن 1000 حرف']
+    required: [true, 'وصف المنتج مطلوب']
   },
   price: {
     type: Number,
     required: [true, 'سعر المنتج مطلوب'],
-    min: [0, 'السعر لا يمكن أن يكون سالب'],
-    max: [100000, 'السعر لا يمكن أن يزيد عن 100,000']
+    min: [0, 'السعر لا يمكن أن يكون سالب']
   },
   category: {
     type: String,
@@ -159,13 +130,11 @@ const productSchema = new mongoose.Schema({
   stock: {
     type: Number,
     required: [true, 'الكمية المتاحة مطلوبة'],
-    min: [0, 'الكمية لا يمكن أن تكون سالبة'],
-    max: [100000, 'الكمية لا يمكن أن تزيد عن 100,000']
+    min: [0, 'الكمية لا يمكن أن تكون سالبة']
   },
   supplier: {
     type: String,
-    required: [true, 'المورد مطلوب'],
-    trim: true
+    required: [true, 'المورد مطلوب']
   },
   unit: {
     type: String,
@@ -182,6 +151,7 @@ const productSchema = new mongoose.Schema({
 
 const Product = mongoose.model('Product', productSchema);
 
+// نموذج الطلب
 const orderSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -191,29 +161,19 @@ const orderSchema = new mongoose.Schema({
   products: [{
     productId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Product',
       required: true
     },
-    name: {
-      type: String,
-      required: true
-    },
-    price: {
-      type: Number,
-      required: true,
-      min: 0
-    },
+    name: String,
+    price: Number,
     quantity: {
       type: Number,
       required: true,
-      min: 1,
-      max: 1000
+      min: 1
     }
   }],
   totalAmount: {
     type: Number,
-    required: true,
-    min: 0
+    required: true
   },
   status: {
     type: String,
@@ -222,24 +182,16 @@ const orderSchema = new mongoose.Schema({
   },
   shippingAddress: {
     type: String,
-    required: true,
-    trim: true,
-    maxlength: 200
+    required: true
   },
   phone: {
     type: String,
-    required: true,
-    match: [/^[0-9]{10}$/, 'رقم الجوال يجب أن يكون 10 أرقام']
+    required: true
   },
   paymentMethod: {
     type: String,
     enum: ['cash', 'card', 'bank_transfer'],
     default: 'cash'
-  },
-  paymentStatus: {
-    type: String,
-    enum: ['pending', 'paid', 'failed', 'refunded'],
-    default: 'pending'
   }
 }, {
   timestamps: true
@@ -247,18 +199,62 @@ const orderSchema = new mongoose.Schema({
 
 const Order = mongoose.model('Order', orderSchema);
 
-// 🔑 إنشاء JWT token آمن
-const signToken = (id, role) => {
-  const expiresIn = role === 'admin' ? '1h' : '7d';
-  
-  return jwt.sign(
-    { id, role }, 
-    process.env.JWT_SECRET,
-    { expiresIn }
-  );
+// إضافة بيانات تجريبية للمنتجات
+const addSampleProducts = async () => {
+  try {
+    const productsCount = await Product.countDocuments();
+    
+    if (productsCount === 0) {
+      await Product.create([
+        {
+          name: 'أسمنت أبيض',
+          description: 'أسمنت أبيض عالي الجودة للمباني',
+          price: 25,
+          category: 'مواد أساسية',
+          image: '/images/cement.jpg',
+          stock: 1000,
+          supplier: 'شركة الاسمنت الوطنية',
+          unit: 'كيس'
+        },
+        {
+          name: 'رمل ناعم',
+          description: 'رمل ناعم للبناء واللياسة',
+          price: 12,
+          category: 'مواد أساسية', 
+          image: '/images/sand.jpg',
+          stock: 5000,
+          supplier: 'محاجر الرياض',
+          unit: 'طن'
+        },
+        {
+          name: 'طوب أحمر',
+          description: 'طوب أحمر عالي الجودة',
+          price: 8,
+          category: 'مواد بناء',
+          image: '/images/bricks.jpg',
+          stock: 20000,
+          supplier: 'مصنع الطوب الأحمر',
+          unit: 'قطعة'
+        }
+      ]);
+      console.log('✅ تم إضافة المنتجات التجريبية');
+    }
+  } catch (error) {
+    console.log('❌ خطأ في إضافة المنتجات التجريبية:', error.message);
+  }
 };
 
-// 🛡️ middleware للتحقق من التوكن
+// استدعاء الدالة عند تشغيل السيرفر
+addSampleProducts();
+
+// إنشاء JWT token
+const signToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET || 'fallback_secret_key_2024', {
+    expiresIn: process.env.JWT_EXPIRES_IN || '90d'
+  });
+};
+
+// Middleware للتحقق من التوكن
 const protect = async (req, res, next) => {
   try {
     let token;
@@ -273,9 +269,8 @@ const protect = async (req, res, next) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key_2024');
     const currentUser = await User.findById(decoded.id);
-    
     if (!currentUser) {
       return res.status(401).json({
         success: false,
@@ -293,189 +288,107 @@ const protect = async (req, res, next) => {
   }
 };
 
-// 🛡️ middleware للمسؤولين فقط
-const restrictTo = (...roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'ليس لديك صلاحية للقيام بهذا الإجراء'
-      });
-    }
-    next();
-  };
-};
-
-// 🧹 معالج الأخطاء
-const handleValidationErrors = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      message: 'بيانات غير صالحة',
-      errors: errors.array()
-    });
-  }
-  next();
-};
-
-// 📊 إضافة بيانات تجريبية
-const addSampleProducts = async () => {
-  try {
-    const productsCount = await Product.countDocuments();
-    
-    if (productsCount === 0) {
-      await Product.create([
-        {
-          name: 'أسمنت أبيض',
-          description: 'أسمنت أبيض عالي الجودة للمباني والدهانات',
-          price: 25,
-          category: 'مواد أساسية',
-          image: '/images/cement.jpg',
-          stock: 1000,
-          supplier: 'شركة الاسمنت الوطنية',
-          unit: 'كيس'
-        },
-        {
-          name: 'رمل ناعم',
-          description: 'رمل ناعم للبناء واللياسة',
-          price: 12,
-          category: 'مواد أساسية', 
-          image: '/images/sand.jpg',
-          stock: 5000,
-          supplier: 'محاجر الرياض',
-          unit: 'طن'
-        }
-      ]);
-      console.log('✅ تم إضافة المنتجات التجريبية');
-    }
-  } catch (error) {
-    console.log('❌ خطأ في إضافة المنتجات التجريبية');
-  }
-};
-
-addSampleProducts();
-
-// 🎯 الـ APIs
-
-// الصفحة الرئيسية
+// Route أساسي
 app.get('/', (req, res) => {
   res.json({ 
     message: 'بناء مارت - Backend شغال!',
     status: 'نجاح',
-    version: '3.0.0',
-    security: 'مؤمن'
+    version: '2.0.0',
+    cors: 'مفعل لجميع النطاقات'
   });
 });
 
-// 🔐 APIs المصادقة
-app.post('/api/auth/register', 
-  [
-    body('name').isLength({ min: 2, max: 50 }).trim().escape(),
-    body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 8 }),
-    body('phone').optional().isLength({ min: 10, max: 10 }).isNumeric(),
-    body('address').optional().isLength({ max: 200 }).trim().escape()
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { name, email, password, phone, address } = req.body;
+// 🔐 Authentication APIs
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, phone, address } = req.body;
 
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'البريد الإلكتروني مسجل مسبقاً'
-        });
-      }
-
-      const newUser = await User.create({
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        password,
-        phone: phone ? phone.trim() : undefined,
-        address: address ? address.trim() : undefined
-      });
-
-      const token = signToken(newUser._id, newUser.role);
-
-      res.status(201).json({
-        success: true,
-        token,
-        user: {
-          id: newUser._id,
-          name: newUser.name,
-          email: newUser.email,
-          role: newUser.role
-        }
-      });
-
-    } catch (error) {
-      res.status(500).json({
+    if (!name || !email || !password) {
+      return res.status(400).json({
         success: false,
-        message: 'خطأ في السيرفر'
+        message: 'الاسم، البريد الإلكتروني وكلمة المرور مطلوبة'
       });
     }
-  }
-);
 
-app.post('/api/auth/login',
-  [
-    body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 1 })
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { email, password } = req.body;
-
-      const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password +loginAttempts +lockUntil');
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
-        });
-      }
-
-      const isPasswordCorrect = await user.correctPassword(password);
-      
-      if (!isPasswordCorrect) {
-        return res.status(401).json({
-          success: false,
-          message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
-        });
-      }
-
-      const token = signToken(user._id, user.role);
-
-      res.status(200).json({
-        success: true,
-        token,
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role
-        }
-      });
-
-    } catch (error) {
-      if (error.message.includes('مغلق مؤقتاً')) {
-        return res.status(423).json({
-          success: false,
-          message: error.message
-        });
-      }
-      
-      res.status(500).json({
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
         success: false,
-        message: 'خطأ في السيرفر'
+        message: 'البريد الإلكتروني مسجل مسبقاً'
       });
     }
+
+    const newUser = await User.create({
+      name,
+      email,
+      password,
+      phone,
+      address
+    });
+
+    const token = signToken(newUser._id);
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في السيرفر',
+      error: error.message
+    });
   }
-);
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'البريد الإلكتروني وكلمة المرور مطلوبان'
+      });
+    }
+
+    const user = await User.findOne({ email }).select('+password');
+    
+    if (!user || !(await user.correctPassword(password, user.password))) {
+      return res.status(401).json({
+        success: false,
+        message: 'البريد الإلكتروني أو كلمة المرور غير صحيحة'
+      });
+    }
+
+    const token = signToken(user._id);
+
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في السيرفر',
+      error: error.message
+    });
+  }
+});
 
 app.get('/api/auth/me', protect, async (req, res) => {
   res.status(200).json({
@@ -491,7 +404,7 @@ app.get('/api/auth/me', protect, async (req, res) => {
   });
 });
 
-// 🛍️ APIs المنتجات
+// 🛍️ Products APIs
 app.get('/api/products', async (req, res) => {
   try {
     const products = await Product.find({ isActive: true });
@@ -505,7 +418,8 @@ app.get('/api/products', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'خطأ في جلب المنتجات'
+      message: 'خطأ في جلب المنتجات',
+      error: error.message
     });
   }
 });
@@ -516,18 +430,18 @@ app.get('/api/products/search', async (req, res) => {
     
     let filter = { isActive: true };
     
-    if (q && typeof q === 'string') {
-      filter.name = { $regex: q.trim(), $options: 'i' };
+    if (q) {
+      filter.name = { $regex: q, $options: 'i' };
     }
     
-    if (category && ['مواد أساسية', 'مواد بناء', 'ادوات كهربائية', 'ادوات صحية'].includes(category)) {
+    if (category) {
       filter.category = category;
     }
     
     if (minPrice || maxPrice) {
       filter.price = {};
-      if (minPrice && !isNaN(minPrice)) filter.price.$gte = Number(minPrice);
-      if (maxPrice && !isNaN(maxPrice)) filter.price.$lte = Number(maxPrice);
+      if (minPrice) filter.price.$gte = Number(minPrice);
+      if (maxPrice) filter.price.$lte = Number(maxPrice);
     }
 
     const products = await Product.find(filter);
@@ -541,102 +455,49 @@ app.get('/api/products/search', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'خطأ في البحث'
+      message: 'خطأ في البحث',
+      error: error.message
     });
   }
 });
 
-app.post('/api/products', protect, restrictTo('admin'),
-  [
-    body('name').isLength({ min: 2, max: 100 }).trim().escape(),
-    body('description').isLength({ min: 10, max: 1000 }).trim().escape(),
-    body('price').isFloat({ min: 0, max: 100000 }),
-    body('category').isIn(['مواد أساسية', 'مواد بناء', 'ادوات كهربائية', 'ادوات صحية']),
-    body('stock').isInt({ min: 0, max: 100000 }),
-    body('supplier').isLength({ min: 2, max: 100 }).trim().escape(),
-    body('unit').isIn(['كيلو', 'طن', 'متر', 'علبة', 'كيس'])
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const product = await Product.create(req.body);
-      
-      res.status(201).json({
-        success: true,
-        message: 'تم إضافة المنتج بنجاح',
-        product
-      });
+// 📦 Orders APIs
+app.post('/api/orders', protect, async (req, res) => {
+  try {
+    const { products, totalAmount, shippingAddress, phone, paymentMethod } = req.body;
 
-    } catch (error) {
-      res.status(500).json({
+    if (!products || !totalAmount || !shippingAddress || !phone) {
+      return res.status(400).json({
         success: false,
-        message: 'خطأ في إضافة المنتج'
+        message: 'المنتجات، المبلغ الإجمالي، العنوان ورقم الجوال مطلوبة'
       });
     }
+
+    const newOrder = await Order.create({
+      user: req.user._id,
+      products,
+      totalAmount,
+      shippingAddress,
+      phone,
+      paymentMethod: paymentMethod || 'cash'
+    });
+
+    const orderWithUser = await Order.findById(newOrder._id).populate('user', 'name email phone');
+
+    res.status(201).json({
+      success: true,
+      message: 'تم إنشاء الطلب بنجاح',
+      order: orderWithUser
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في إنشاء الطلب',
+      error: error.message
+    });
   }
-);
-
-// 📦 APIs الطلبات
-app.post('/api/orders', protect,
-  [
-    body('products').isArray({ min: 1 }),
-    body('products.*.productId').isMongoId(),
-    body('products.*.name').isLength({ min: 2, max: 100 }).trim().escape(),
-    body('products.*.price').isFloat({ min: 0 }),
-    body('products.*.quantity').isInt({ min: 1, max: 1000 }),
-    body('totalAmount').isFloat({ min: 0 }),
-    body('shippingAddress').isLength({ min: 5, max: 200 }).trim().escape(),
-    body('phone').isLength({ min: 10, max: 10 }).isNumeric()
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { products, totalAmount, shippingAddress, phone, paymentMethod } = req.body;
-
-      // التحقق من توفر المنتجات
-      for (const item of products) {
-        const product = await Product.findById(item.productId);
-        if (!product || product.stock < item.quantity) {
-          return res.status(400).json({
-            success: false,
-            message: `المنتج ${item.name} غير متوفر بالكمية المطلوبة`
-          });
-        }
-      }
-
-      // خصم الكمية من المخزون
-      for (const item of products) {
-        await Product.findByIdAndUpdate(
-          item.productId, 
-          { $inc: { stock: -item.quantity } }
-        );
-      }
-
-      const newOrder = await Order.create({
-        user: req.user._id,
-        products,
-        totalAmount,
-        shippingAddress: shippingAddress.trim(),
-        phone: phone.trim(),
-        paymentMethod: paymentMethod || 'cash'
-      });
-
-      const orderWithUser = await Order.findById(newOrder._id).populate('user', 'name email phone');
-
-      res.status(201).json({
-        success: true,
-        message: 'تم إنشاء الطلب بنجاح',
-        order: orderWithUser
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: 'خطأ في إنشاء الطلب'
-      });
-    }
-  }
-);
+});
 
 app.get('/api/orders/my-orders', protect, async (req, res) => {
   try {
@@ -652,163 +513,13 @@ app.get('/api/orders/my-orders', protect, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'خطأ في جلب الطلبات'
+      message: 'خطأ في جلب الطلبات',
+      error: error.message
     });
   }
 });
 
-app.get('/api/orders/:id', protect, async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id).populate('user', 'name email phone');
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'الطلب غير موجود'
-      });
-    }
-
-    if (order.user._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'غير مصرح بالوصول لهذا الطلب'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      order
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'خطأ في جلب الطلب'
-    });
-  }
-});
-
-// 💳 APIs الدفع
-app.post('/api/payment/create', protect,
-  [
-    body('orderId').isMongoId(),
-    body('amount').isFloat({ min: 0 }),
-    body('paymentMethod').isIn(['cash', 'card', 'bank_transfer'])
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { orderId, amount, paymentMethod } = req.body;
-
-      const order = await Order.findById(orderId);
-      if (!order) {
-        return res.status(404).json({
-          success: false,
-          message: 'الطلب غير موجود'
-        });
-      }
-
-      if (order.user.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'غير مصرح بالدفع لهذا الطلب'
-        });
-      }
-
-      // محاكاة إنشاء جلسة دفع آمنة
-      const paymentData = {
-        paymentId: 'pay_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-        orderId,
-        amount,
-        paymentMethod: paymentMethod || 'card',
-        status: 'pending',
-        paymentUrl: `https://payment-gateway.com/pay/${Date.now()}`,
-        createdAt: new Date()
-      };
-
-      res.status(200).json({
-        success: true,
-        message: 'تم إنشاء جلسة الدفع',
-        payment: paymentData
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: 'خطأ في إنشاء الدفع'
-      });
-    }
-  }
-);
-
-app.post('/api/payment/verify', protect,
-  [
-    body('paymentId').isLength({ min: 10 }),
-    body('orderId').isMongoId()
-  ],
-  handleValidationErrors,
-  async (req, res) => {
-    try {
-      const { paymentId, orderId } = req.body;
-
-      const order = await Order.findById(orderId);
-      if (!order) {
-        return res.status(404).json({
-          success: false,
-          message: 'الطلب غير موجود'
-        });
-      }
-
-      if (order.user.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'غير مصرح بالتحقق من هذا الطلب'
-        });
-      }
-
-      // محاكاة التحقق من الدفع بشكل آمن
-      const isSuccess = require('crypto').randomBytes(1)[0] > 51; // 80% نجاح
-
-      if (isSuccess) {
-        await Order.findByIdAndUpdate(orderId, {
-          status: 'confirmed',
-          paymentStatus: 'paid'
-        });
-
-        res.status(200).json({
-          success: true,
-          message: 'تم الدفع بنجاح',
-          payment: {
-            paymentId,
-            status: 'paid',
-            paidAt: new Date()
-          }
-        });
-      } else {
-        await Order.findByIdAndUpdate(orderId, {
-          paymentStatus: 'failed'
-        });
-
-        res.status(400).json({
-          success: false,
-          message: 'فشل في عملية الدفع',
-          payment: {
-            paymentId,
-            status: 'failed'
-          }
-        });
-      }
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: 'خطأ في التحقق من الدفع'
-      });
-    }
-  }
-);
-
-// 🔔 APIs إضافية
+// 🔔 Notifications API
 app.get('/api/notifications', protect, async (req, res) => {
   try {
     const notifications = [
@@ -819,6 +530,14 @@ app.get('/api/notifications', protect, async (req, res) => {
         type: 'info',
         isRead: false,
         createdAt: new Date()
+      },
+      {
+        id: 2,
+        title: 'عرض خاص',
+        message: 'خصم 10% على جميع مواد البناء هذا الأسبوع',
+        type: 'promotion', 
+        isRead: false,
+        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000)
       }
     ];
 
@@ -831,66 +550,23 @@ app.get('/api/notifications', protect, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'خطأ في جلب الإشعارات'
+      message: 'خطأ في جلب الإشعارات',
+      error: error.message
     });
   }
 });
 
-// 📊 APIs الإحصائيات (للمسؤول)
-app.get('/api/admin/stats', protect, restrictTo('admin'), async (req, res) => {
-  try {
-    const totalUsers = await User.countDocuments();
-    const totalProducts = await Product.countDocuments();
-    const totalOrders = await Order.countDocuments();
-    const totalRevenue = await Order.aggregate([
-      { $match: { status: { $in: ['confirmed', 'delivered'] } } },
-      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-    ]);
-
-    const recentOrders = await Order.find()
-      .populate('user', 'name email')
-      .sort({ createdAt: -1 })
-      .limit(5);
-
-    res.status(200).json({
-      success: true,
-      stats: {
-        totalUsers,
-        totalProducts, 
-        totalOrders,
-        totalRevenue: totalRevenue[0]?.total || 0,
-        recentOrders
-      }
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'خطأ في جلب الإحصائيات'
-    });
-  }
-});
-
-// 🚨 معالج الأخطاء
+// صفحة 404 للروابط غير الموجودة
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
     message: 'الصفحة غير موجودة',
-    path: req.path
-  });
-});
-
-app.use((error, req, res, next) => {
-  console.error('🚨 خطأ:', error);
-  
-  res.status(500).json({
-    success: false,
-    message: 'حدث خطأ غير متوقع في السيرفر'
+    path: req.originalUrl
   });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`✅ السيرفر شغال على http://localhost:${PORT}`);
-  console.log(`🔒 الوضع: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ السيرفر شغال على البورت ${PORT}`);
+  console.log(`🌐 CORS مفعل لجميع النطاقات`);
 });
