@@ -60,7 +60,7 @@ app.use(express.json());
 const otpStorage = new Map();
 
 // إعداد nodemailer لإرسال الإيميلات
-const transporter = nodemailer.createTransporter({
+const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
@@ -741,5 +741,6 @@ app.listen(PORT, () => {
   console.log(`🌐 CORS مفعل لجميع النطاقات`);
   console.log(`📧 نظام OTP جاهز`);
 });
+
 
 
