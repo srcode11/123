@@ -10,8 +10,7 @@ const app = express();
 // 🔧 إعدادات CORS الشاملة للإنتاج والتطوير
 app.use(cors({
   origin: [
-    'https://cool-dusk-b34915.netlify.app',
-    'http://cool-dusk-b34915.netlify.app',
+    'https://construction-platform1.netlify.app/',
     'https://one23-1-4noo.onrender.com',
     'http://one23-1-4noo.onrender.com',
     'http://localhost:3000',
@@ -570,3 +569,4 @@ app.listen(PORT, () => {
   console.log(`✅ السيرفر شغال على البورت ${PORT}`);
   console.log(`🌐 CORS مفعل لجميع النطاقات`);
 });
+
