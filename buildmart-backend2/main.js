@@ -3,6 +3,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const app = express();
@@ -740,4 +741,5 @@ app.listen(PORT, () => {
   console.log(`🌐 CORS مفعل لجميع النطاقات`);
   console.log(`📧 نظام OTP جاهز`);
 });
+
 
