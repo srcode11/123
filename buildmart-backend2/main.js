@@ -13,7 +13,6 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:5500',
   'https://one23-6-l3re.onrender.com',
-  'https://your-frontend-domain.com' // أضف نطاقك هنا
 ];
 
 app.use(cors({
@@ -686,3 +685,4 @@ app.listen(PORT, () => {
   console.log(`🌐 CORS مفعل للنطاقات: ${allowedOrigins.join(', ')}`);
   console.log(`🚀 Ready to accept requests from allowed origins`);
 });
+
