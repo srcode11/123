@@ -3,26 +3,22 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const app = express();
 
-// 🔧 إعدادات CORS النهائية
+// 🔧 إعدادات CORS مبسطة وآمنة للفرونت
+const allowedOrigins = [
+  'https://construction-platform1.netlify.app',
+  'http://localhost:3000',
+  'http://127.0.0.1:5500',
+  'https://one23-6-l3re.onrender.com'
+];
+
 app.use(cors({
-  origin: function (origin, callback) {
-    const allowedOrigins = [
-      'https://construction-platform1.netlify.app/',
-      'http://construction-platform1.netlify.app',
-      'https://one23-2-ziy6.onrender.com',
-      'http://one23-2-ziy6.onrender.com',
-      'http://localhost:3000',
-      'http://127.0.0.1:5500',
-      'http://localhost:5500',
-      '*'
-    ];
-    
-    if (!origin || allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'production') {
+  origin: function(origin, callback) {
+    // السماح للطلبات بدون origin (مثل Postman) أو للـ origins المسموح بها
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -30,43 +26,19 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// معالجة Preflight requests
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    return res.status(200).json({});
-  }
-  next();
-});
-
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.status(200).send();
-});
+// معالجة Preflight requests تلقائياً
+app.options('*', cors({
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Middlewares
 app.use(express.json());
-
-// تخزين رموز OTP مؤقتاً
-const otpStorage = new Map();
-
-// إعداد nodemailer لإرسال الإيميلات
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
 
 // اتصال بقاعدة البيانات
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/buildmart', {
@@ -107,10 +79,6 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['customer', 'admin'],
     default: 'customer'
-  },
-  isVerified: {
-    type: Boolean,
-    default: false
   }
 }, {
   timestamps: true
@@ -316,109 +284,28 @@ const protect = async (req, res, next) => {
   }
 };
 
-// 📧 إرسال رمز التحقق
-const sendVerificationEmail = async (email, otp) => {
-  try {
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: 'رمز التحقق - منصة مواد البناء',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">مرحباً بك في منصة مواد البناء</h2>
-          <p>رمز التحقق الخاص بك هو:</p>
-          <div style="background: #f4f4f4; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 5px; margin: 20px 0;">
-            ${otp}
-          </div>
-          <p>هذا الرمز صالح لمدة 10 دقائق</p>
-          <p>إذا لم تطلب هذا الرمز، يرجى تجاهل هذا الإيميل</p>
-        </div>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    return true;
-  } catch (error) {
-    console.log('خطأ في إرسال الإيميل:', error);
-    return false;
-  }
-};
-
-// 🔐 APIs المصادقة مع OTP
-
-// إرسال رمز التحقق
-app.post('/api/auth/send-otp', async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'البريد الإلكتروني مطلوب'
-      });
-    }
-
-    // إنشاء رمز OTP عشوائي
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 دقائق
-
-    // حفظ OTP في الذاكرة
-    otpStorage.set(email, { otp, expiresAt });
-
-    // إرسال الإيميل
-    const emailSent = await sendVerificationEmail(email, otp);
-
-    if (!emailSent) {
-      return res.status(500).json({
-        success: false,
-        message: 'خطأ في إرسال رمز التحقق'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'تم إرسال رمز التحقق إلى بريدك الإلكتروني'
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'خطأ في إرسال رمز التحقق',
-      error: error.message
-    });
-  }
+// Route أساسي
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'بناء مارت - Backend شغال!',
+    status: 'نجاح',
+    version: '3.0.0',
+    cors: 'مفعل للنطاقات المحددة'
+  });
 });
 
-// تسجيل مستخدم جديد مع OTP
+// 🔐 Authentication APIs
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, phone, address, otp } = req.body;
+    const { name, email, password, phone, address } = req.body;
 
-    if (!name || !email || !password || !otp) {
+    if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'الاسم، البريد الإلكتروني، كلمة المرور ورمز التحقق مطلوبة'
+        message: 'الاسم، البريد الإلكتروني وكلمة المرور مطلوبة'
       });
     }
 
-    // التحقق من OTP
-    const storedOtp = otpStorage.get(email);
-    if (!storedOtp || storedOtp.otp !== otp) {
-      return res.status(400).json({
-        success: false,
-        message: 'رمز التحقق غير صحيح'
-      });
-    }
-
-    if (Date.now() > storedOtp.expiresAt) {
-      otpStorage.delete(email);
-      return res.status(400).json({
-        success: false,
-        message: 'رمز التحقق منتهي الصلاحية'
-      });
-    }
-
-    // التحقق إذا المستخدم موجود مسبقاً
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({
@@ -427,18 +314,13 @@ app.post('/api/auth/register', async (req, res) => {
       });
     }
 
-    // إنشاء المستخدم
     const newUser = await User.create({
       name,
       email,
       password,
       phone,
-      address,
-      isVerified: true
+      address
     });
-
-    // مسح OTP بعد الاستخدام
-    otpStorage.delete(email);
 
     const token = signToken(newUser._id);
 
@@ -449,8 +331,7 @@ app.post('/api/auth/register', async (req, res) => {
         id: newUser._id,
         name: newUser.name,
         email: newUser.email,
-        role: newUser.role,
-        isVerified: newUser.isVerified
+        role: newUser.role
       }
     });
 
@@ -463,35 +344,15 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// تسجيل الدخول مع OTP
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password, otp } = req.body;
+    const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
         success: false,
         message: 'البريد الإلكتروني وكلمة المرور مطلوبان'
       });
-    }
-
-    // إذا تم إرسال OTP، التحقق منه
-    if (otp) {
-      const storedOtp = otpStorage.get(email);
-      if (!storedOtp || storedOtp.otp !== otp) {
-        return res.status(400).json({
-          success: false,
-          message: 'رمز التحقق غير صحيح'
-        });
-      }
-
-      if (Date.now() > storedOtp.expiresAt) {
-        otpStorage.delete(email);
-        return res.status(400).json({
-          success: false,
-          message: 'رمز التحقق منتهي الصلاحية'
-        });
-      }
     }
 
     const user = await User.findOne({ email }).select('+password');
@@ -503,28 +364,6 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    // إذا كان OTP مطلوب ولم يتم إرساله
-    if (!otp && process.env.REQUIRE_OTP === 'true') {
-      // إرسال OTP لتسجيل الدخول
-      const loginOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = Date.now() + 10 * 60 * 1000;
-      
-      otpStorage.set(email, { otp: loginOtp, expiresAt, purpose: 'login' });
-      
-      await sendVerificationEmail(email, loginOtp);
-
-      return res.status(200).json({
-        success: true,
-        requiresOtp: true,
-        message: 'تم إرسال رمز التحقق إلى بريدك الإلكتروني'
-      });
-    }
-
-    // مسح OTP بعد الاستخدام الناجح
-    if (otp) {
-      otpStorage.delete(email);
-    }
-
     const token = signToken(user._id);
 
     res.status(200).json({
@@ -534,8 +373,7 @@ app.post('/api/auth/login', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        isVerified: user.isVerified
+        role: user.role
       }
     });
 
@@ -548,7 +386,6 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// باقي الـ APIs تبقى كما هي...
 app.get('/api/auth/me', protect, async (req, res) => {
   res.status(200).json({
     success: true,
@@ -558,8 +395,7 @@ app.get('/api/auth/me', protect, async (req, res) => {
       email: req.user.email,
       role: req.user.role,
       phone: req.user.phone,
-      address: req.user.address,
-      isVerified: req.user.isVerified
+      address: req.user.address
     }
   });
 });
@@ -716,16 +552,6 @@ app.get('/api/notifications', protect, async (req, res) => {
   }
 });
 
-// Route أساسي
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'بناء مارت - Backend شغال!',
-    status: 'نجاح',
-    version: '3.0.0',
-    features: ['CORS كامل', 'نظام OTP', 'تسجيل آمن']
-  });
-});
-
 // صفحة 404 للروابط غير الموجودة
 app.use('*', (req, res) => {
   res.status(404).json({
@@ -738,9 +564,5 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ السيرفر شغال على البورت ${PORT}`);
-  console.log(`🌐 CORS مفعل لجميع النطاقات`);
-  console.log(`📧 نظام OTP جاهز`);
+  console.log(`🌐 CORS مفعل للنطاقات: ${allowedOrigins.join(', ')}`);
 });
-
-
-
