@@ -12,7 +12,8 @@ const allowedOrigins = [
   'https://construction-platform1.netlify.app',
   'http://localhost:3000',
   'http://127.0.0.1:5500',
-  'https://one23-6-l3re.onrender.com'
+  'https://one23-6-l3re.onrender.com',
+  'https://your-frontend-domain.com' // أضف نطاقك هنا
 ];
 
 app.use(cors({
@@ -21,21 +22,18 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.log('CORS Blocked for origin:', origin);
+      // بدل رمي error، نرجع response مناسبة
+      callback(null, false);
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 // معالجة Preflight requests تلقائياً
-app.options('*', cors({
-  origin: allowedOrigins,
-  credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.options('*', cors());
 
 // Middlewares
 app.use(express.json());
@@ -121,7 +119,7 @@ const productSchema = new mongoose.Schema({
   },
   image: {
     type: String,
-    default: '/images/default-product.jpg'
+    default: 'https://via.placeholder.com/300x200?text=منتج+بناء'
   },
   stock: {
     type: Number,
@@ -207,7 +205,7 @@ const addSampleProducts = async () => {
           description: 'أسمنت أبيض عالي الجودة للمباني',
           price: 25,
           category: 'مواد أساسية',
-          image: '/images/cement.jpg',
+          image: 'https://via.placeholder.com/300x200?text=أسمنت+أبيض',
           stock: 1000,
           supplier: 'شركة الاسمنت الوطنية',
           unit: 'كيس'
@@ -217,7 +215,7 @@ const addSampleProducts = async () => {
           description: 'رمل ناعم للبناء واللياسة',
           price: 12,
           category: 'مواد أساسية', 
-          image: '/images/sand.jpg',
+          image: 'https://via.placeholder.com/300x200?text=رمل+ناعم',
           stock: 5000,
           supplier: 'محاجر الرياض',
           unit: 'طن'
@@ -227,10 +225,30 @@ const addSampleProducts = async () => {
           description: 'طوب أحمر عالي الجودة',
           price: 8,
           category: 'مواد بناء',
-          image: '/images/bricks.jpg',
+          image: 'https://via.placeholder.com/300x200?text=طوب+أحمر',
           stock: 20000,
           supplier: 'مصنع الطوب الأحمر',
           unit: 'قطعة'
+        },
+        {
+          name: 'أسلاك كهربائية',
+          description: 'أسلاك كهربائية عالية الجودة',
+          price: 15,
+          category: 'ادوات كهربائية',
+          image: 'https://via.placeholder.com/300x200?text=أسلاك+كهربائية',
+          stock: 500,
+          supplier: 'شركة الكهرباء الوطنية',
+          unit: 'متر'
+        },
+        {
+          name: 'مواسير PVC',
+          description: 'مواسير PVC للصرف الصحي',
+          price: 30,
+          category: 'ادوات صحية',
+          image: 'https://via.placeholder.com/300x200?text=مواسير+PVC',
+          stock: 800,
+          supplier: 'مصنع المواسير',
+          unit: 'متر'
         }
       ]);
       console.log('✅ تم إضافة المنتجات التجريبية');
@@ -290,7 +308,8 @@ app.get('/', (req, res) => {
     message: 'بناء مارت - Backend شغال!',
     status: 'نجاح',
     version: '3.0.0',
-    cors: 'مفعل للنطاقات المحددة'
+    cors: 'مفعل للنطاقات المسموحة',
+    allowedOrigins: allowedOrigins
   });
 });
 
@@ -420,6 +439,31 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'المنتج غير موجود'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      product
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في جلب المنتج',
+      error: error.message
+    });
+  }
+});
+
 app.get('/api/products/search', async (req, res) => {
   try {
     const { q, category, minPrice, maxPrice } = req.query;
@@ -515,6 +559,34 @@ app.get('/api/orders/my-orders', protect, async (req, res) => {
   }
 });
 
+app.get('/api/orders/:id', protect, async (req, res) => {
+  try {
+    const order = await Order.findOne({ 
+      _id: req.params.id, 
+      user: req.user._id 
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'الطلب غير موجود'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      order
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في جلب الطلب',
+      error: error.message
+    });
+  }
+});
+
 // 🔔 Notifications API
 app.get('/api/notifications', protect, async (req, res) => {
   try {
@@ -552,6 +624,43 @@ app.get('/api/notifications', protect, async (req, res) => {
   }
 });
 
+// 📊 Statistics API (للأدمن)
+app.get('/api/stats', protect, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'غير مصرح بالوصول'
+      });
+    }
+
+    const usersCount = await User.countDocuments();
+    const productsCount = await Product.countDocuments();
+    const ordersCount = await Order.countDocuments();
+    const totalRevenue = await Order.aggregate([
+      { $match: { status: { $ne: 'cancelled' } } },
+      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        users: usersCount,
+        products: productsCount,
+        orders: ordersCount,
+        revenue: totalRevenue[0]?.total || 0
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'خطأ في جلب الإحصائيات',
+      error: error.message
+    });
+  }
+});
+
 // صفحة 404 للروابط غير الموجودة
 app.use('*', (req, res) => {
   res.status(404).json({
@@ -561,8 +670,19 @@ app.use('*', (req, res) => {
   });
 });
 
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global Error:', error);
+  res.status(500).json({
+    success: false,
+    message: 'حدث خطأ غير متوقع في السيرفر',
+    error: process.env.NODE_ENV === 'development' ? error.message : undefined
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ السيرفر شغال على البورت ${PORT}`);
   console.log(`🌐 CORS مفعل للنطاقات: ${allowedOrigins.join(', ')}`);
+  console.log(`🚀 Ready to accept requests from allowed origins`);
 });
